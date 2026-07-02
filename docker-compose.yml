@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  terraform:
+    image: hashicorp/terraform:latest
+    working_dir: /workspace
+    volumes:
+      - ./terraform:/workspace
+      - ~/.aws:/root/.aws
+      - ~/.ssh:/root/.ssh
+    entrypoint: ["terraform"]
+
+  ansible:
+    image: willhallonline/ansible:latest
+    working_dir: /project/ansible
+    volumes:
+      - .:/project
+      - ~/.ssh:/root/.ssh
+    entrypoint: ["ansible-playbook"]

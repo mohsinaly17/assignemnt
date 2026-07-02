@@ -1,0 +1,49 @@
+name: Build and Deploy Docker App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # Optional: build & lint the image locally in the CI runner first,
+      # so a broken Dockerfile fails fast before we touch the server.
+      # -----------------------------------------------------------------
+      - name: Build Docker image (CI validation)
+        run: docker build -t sample-app:ci ./app
+
+      # -----------------------------------------------------------------
+      # Set up SSH access to the EC2 instance using a GitHub Secret
+      # -----------------------------------------------------------------
+      - name: Configure SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+          ansible-galaxy collection install community.docker
+
+      # -----------------------------------------------------------------
+      # Generate inventory dynamically from the GitHub Secret holding
+      # the EC2 IP (this IP comes from `terraform output` after apply)
+      # -----------------------------------------------------------------
+      - name: Generate Ansible inventory
+        run: |
+          echo "[app_servers]" > ansible/inventory.ini
+          echo "app_server ansible_host=${{ secrets.EC2_HOST }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa" >> ansible/inventory.ini
+
+      - name: Run Ansible playbook to configure server & deploy container
+        working-directory: ansible
+        run: ansible-playbook playbook.yml
