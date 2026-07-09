@@ -83,6 +83,12 @@
         dest: "{{ app_dir }}"
         owner: ubuntu
 
+    - name: Write real deployment marker (proves Ansible actually ran, and when)
+      copy:
+        content: "{{ ansible_date_time.iso8601 }}"
+        dest: "{{ app_dir }}/.deployed_at"
+        owner: ubuntu
+
     - name: Build Docker image from Dockerfile
       community.docker.docker_image:
         name: "{{ image_name }}"
@@ -99,3 +105,5 @@
         restart_policy: always
         ports:
           - "{{ host_port }}:{{ container_port }}"
+        volumes:
+          - "{{ app_dir }}/.deployed_at:/deploy_info/.deployed_at:ro"
