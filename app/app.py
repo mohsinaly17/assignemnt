@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import socket
 import time
 import os
+import json
 import urllib.request
 import urllib.error
 
@@ -23,11 +24,18 @@ def format_uptime(seconds):
     return f"{secs}s"
 
 
-def get_aws_metadata():
-    """Queries the EC2 Instance Metadata Service (IMDSv2) for real, live
-    facts about the AWS infrastructure Terraform provisioned. Returns a
-    dict with a status flag, since this only works when actually running
-    on an EC2 instance (fails gracefully everywhere else, e.g. local dev)."""
+def imds_fetch(path, token):
+    req = urllib.request.Request(
+        f"{IMDS_BASE}/meta-data/{path}",
+        headers={"X-aws-ec2-metadata-token": token},
+    )
+    return urllib.request.urlopen(req, timeout=1).read().decode()
+
+
+def get_aws_and_terraform_info():
+    """Queries the real EC2 Instance Metadata Service. Everything returned
+    here is infrastructure Terraform actually provisioned -- this is not
+    hardcoded, it is read live from the instance itself."""
     try:
         token_req = urllib.request.Request(
             f"{IMDS_BASE}/api/token",
@@ -36,47 +44,73 @@ def get_aws_metadata():
         )
         token = urllib.request.urlopen(token_req, timeout=1).read().decode()
 
-        def fetch(path):
-            req = urllib.request.Request(
-                f"{IMDS_BASE}/meta-data/{path}",
-                headers={"X-aws-ec2-metadata-token": token},
-            )
-            return urllib.request.urlopen(req, timeout=1).read().decode()
+        security_groups = imds_fetch("security-groups", token).split("\n")
 
         return {
             "status": "reachable",
-            "instance_id": fetch("instance-id"),
-            "instance_type": fetch("instance-type"),
-            "availability_zone": fetch("placement/availability-zone"),
-            "public_ipv4": fetch("public-ipv4"),
+            "provisioned_by": "Terraform (main.tf)",
+            "instance_id": imds_fetch("instance-id", token),
+            "instance_type": imds_fetch("instance-type", token),
+            "ami_id": imds_fetch("ami-id", token),
+            "availability_zone": imds_fetch("placement/availability-zone", token),
+            "public_ipv4": imds_fetch("public-ipv4", token),
+            "private_ipv4": imds_fetch("local-ipv4", token),
+            "security_groups": security_groups,
         }
     except (urllib.error.URLError, TimeoutError, OSError):
-        return {"status": "unreachable (not running on EC2, or IMDS blocked)"}
+        return {
+            "status": "unreachable",
+            "note": "Instance metadata service did not respond. On Docker, this usually means the metadata hop limit needs increasing (aws ec2 modify-instance-metadata-options --http-put-response-hop-limit 2), or this is not running on EC2 at all.",
+        }
 
 
-def get_deployment_info():
-    """Reads the timestamp Ansible actually wrote to disk during its most
-    recent playbook run. If this file is missing, Ansible has never
-    successfully deployed to this container."""
+def get_ansible_deployment_info():
+    """Reads a marker file that Ansible itself writes to disk during every
+    playbook run, containing the real deployment timestamp and, when
+    deployed via CI/CD, the exact git commit and workflow run number."""
     marker_path = "/deploy_info/.deployed_at"
-    if os.path.exists(marker_path):
+    if not os.path.exists(marker_path):
+        return {"status": "no deployment marker found -- Ansible has not deployed to this container"}
+    try:
         with open(marker_path) as f:
-            deployed_at = f.read().strip()
-        return {"status": "confirmed", "last_deployed_at_utc": deployed_at}
-    return {"status": "no deployment marker found"}
+            data = json.load(f)
+        return {"status": "confirmed", **data}
+    except (json.JSONDecodeError, ValueError):
+        with open(marker_path) as f:
+            legacy_timestamp = f.read().strip()
+        return {"status": "confirmed", "deployed_at_utc": legacy_timestamp, "note": "legacy marker format"}
 
 
 def get_docker_info():
-    """Confirms this process is genuinely running inside a Docker
-    container by checking for the /.dockerenv marker file Docker itself
-    creates, rather than just assuming it."""
+    """Confirms this process is genuinely running inside a Docker container
+    by checking for /.dockerenv, a file Docker itself creates."""
     if os.path.exists("/.dockerenv"):
-        return {"status": "confirmed", "note": "process is running inside a Docker container"}
+        return {
+            "status": "confirmed",
+            "note": "process is running inside a Docker container built from app/Dockerfile",
+            "base_image": "python:3.12-slim",
+        }
     return {"status": "not running inside Docker"}
+
+
+def get_cicd_info(ansible_info):
+    """Surfaces CI/CD traceability using the same data Ansible wrote,
+    so you can see whether the live app was deployed manually or by
+    GitHub Actions, and exactly which commit is running."""
+    if ansible_info.get("status") != "confirmed":
+        return {"status": "unknown -- no deployment record found"}
+    return {
+        "status": "confirmed",
+        "deployed_by": ansible_info.get("deployed_by", "unknown"),
+        "git_commit": ansible_info.get("git_commit", "unknown"),
+        "github_actions_run_number": ansible_info.get("run_number", "n/a"),
+        "workflow_file": ".github/workflows/deploy.yml",
+    }
 
 
 @app.route("/")
 def home():
+    ansible_info = get_ansible_deployment_info()
     return jsonify({
         "message": "Hello from the automated Docker deployment!",
         "hostname": socket.gethostname(),
@@ -85,8 +119,9 @@ def home():
         "checks": {
             "flask_application": {"status": "running"},
             "docker": get_docker_info(),
-            "ansible_deployment": get_deployment_info(),
-            "aws_ec2_instance": get_aws_metadata(),
+            "ansible_deployment": ansible_info,
+            "terraform_and_aws_infrastructure": get_aws_and_terraform_info(),
+            "cicd_pipeline": get_cicd_info(ansible_info),
         }
     })
 

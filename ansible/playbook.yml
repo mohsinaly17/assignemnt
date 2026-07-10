@@ -8,6 +8,12 @@
     container_name: sample-app
     host_port: 80
     container_port: 5000
+    # These are overridden at run time using --extra-vars.
+    # GitHub Actions passes the real commit SHA and run number automatically.
+    # Manual local runs default to these values instead.
+    git_commit: "manual-deploy"
+    run_number: "n/a"
+    deployed_by: "manual"
 
   tasks:
     # -------------------------------------------------------------------
@@ -83,9 +89,9 @@
         dest: "{{ app_dir }}"
         owner: ubuntu
 
-    - name: Write real deployment marker (proves Ansible actually ran, and when)
+    - name: Write real deployment marker (proves Ansible actually ran, when, and from where)
       copy:
-        content: "{{ ansible_date_time.iso8601 }}"
+        content: "{{ {'deployed_at_utc': ansible_date_time.iso8601, 'git_commit': git_commit, 'run_number': run_number, 'deployed_by': deployed_by} | to_nice_json }}"
         dest: "{{ app_dir }}/.deployed_at"
         owner: ubuntu
 
