@@ -46,4 +46,6 @@ jobs:
 
       - name: Run Ansible playbook to configure server & deploy container
         working-directory: ansible
-        run: ansible-playbook playbook.yml
+        run: >
+          ansible-playbook playbook.yml
+          --extra-vars "git_commit=${{ github.sha }} run_number=${{ github.run_number }} deployed_by=github-actions"
