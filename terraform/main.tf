@@ -102,3 +102,16 @@ resource "aws_instance" "app_server" {
     Name = "docker-app-server"
   }
 }
+
+# ---------------------------------------------------------------------------
+# Elastic IP: keeps the same public IP address across stop/start cycles,
+# so the Ansible inventory and GitHub secret never need updating again.
+# ---------------------------------------------------------------------------
+resource "aws_eip" "app_server_eip" {
+  instance = aws_instance.app_server.id
+  domain   = "vpc"
+
+  tags = {
+    Name = "docker-app-server-eip"
+  }
+}
