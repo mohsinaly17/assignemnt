@@ -112,7 +112,7 @@ def get_cicd_info(ansible_info):
 def home():
     ansible_info = get_ansible_deployment_info()
     return jsonify({
-        "message": "we changed the line !!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        "message": "Hello Sir",
         "hostname": socket.gethostname(),
         "server_time_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "app_uptime": format_uptime(time.time() - START_TIME),
